@@ -36,7 +36,7 @@
         <button id="create">Crea (Pensatore)</button>
       </div>
       <h3>Stanze attive</h3>
-      <div id="rooms"></div>
+      <div id="rooms"><i>Nessuna stanza attiva al momento.</i></div>
     </div>
 
     <!-- GAME -->
@@ -141,22 +141,27 @@
     // Socket events
     socket.on('connect', () => { me.id = socket.id; });
     socket.on('system:error', (m) => appendLog('❗ ' + m));
+
     socket.on('rooms:update', (list) => {
       $('rooms').innerHTML = '';
-      list.forEach(r => {
-        const div = document.createElement('div');
-        div.className = 'row';
-        div.innerHTML = `<span>Stanza <b>${r.code}</b> — Giocatori: ${r.players} — Stato: ${r.status}</span>`;
-        const btn = document.createElement('button');
-        btn.textContent = 'Entra';
-        btn.onclick = () => {
-          me.name = $('name').value || 'Anon';
-          roomCode = r.code;
-          socket.emit('room:join', { code: roomCode, name: me.name });
-        };
-        div.appendChild(btn);
-        $('rooms').appendChild(div);
-      });
+      if (list.length === 0) {
+        $('rooms').innerHTML = '<i>Nessuna stanza attiva al momento.</i>';
+      } else {
+        list.forEach(r => {
+          const div = document.createElement('div');
+          div.className = 'row';
+          div.innerHTML = `<span>Stanza <b>${r.code}</b> — Giocatori: ${r.players} — Stato: ${r.status}</span>`;
+          const btn = document.createElement('button');
+          btn.textContent = 'Entra';
+          btn.onclick = () => {
+            me.name = $('name').value || 'Anon';
+            roomCode = r.code;
+            socket.emit('room:join', { code: roomCode, name: me.name });
+          };
+          div.appendChild(btn);
+          $('rooms').appendChild(div);
+        });
+      }
     });
 
     socket.on('room:state', (s) => {
@@ -179,9 +184,8 @@
     });
 
     socket.on('round:secret', ({ secretWord }) => appendLog('🔒 Sei Pensatore. Parola: ' + secretWord));
+
     socket.on('question:new', (q) => {
-      $('qcount').textContent = q.id;
-      $('progress').style.width = (parseInt($('qcount').textContent)/parseInt($('qmax').textContent)*100)+'%';
       appendLog(`❓ (${q.byName}) ${q.text}`);
       if (me.role === 'thinker') {
         lastQuestionId = q.id;
@@ -190,6 +194,7 @@
         $('overlay').style.display = 'flex';
       }
     });
+
     socket.on('question:update', (q) => { appendLog(`🗣️ Risposta: ${q.answer}`); });
     socket.on('turn:now', ({ socketId, name }) => {
       $('turn').textContent = socketId === me.id ? 'TU' : (name || '–');
@@ -200,16 +205,15 @@
       $('start').classList.remove('hidden');
     });
 
+    // Contatore domande: SOLO server decide
     socket.on('counter:update', ({ asked, max }) => {
       $('qcount').textContent = asked;
       $('progress').style.width = (asked/max*100)+'%';
     });
 
-    // Chat
+    // Chat & Log
     socket.on('chat:message', ({ name, text }) => appendChat(name, text));
     socket.on('chat:history', (msgs) => { msgs.forEach(m => appendChat(m.name, m.text)); });
-
-    // Log
     socket.on('log:message', (m) => appendLog(m));
     socket.on('log:history', (msgs) => { msgs.forEach(m => appendLog(m)); });
   </script>
