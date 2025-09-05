@@ -24,7 +24,9 @@ function createRoom(code) {
     turnIdx: 0,
     maxQuestions: 20,
     asked: 0,
-    guessAttempts: null
+    guessAttempts: null,
+    logs: [], // nuovo
+    chat: []  // nuovo
   });
 }
 
@@ -39,20 +41,24 @@ io.on('connection', (socket) => {
     room.thinkerSocketId = socket.id;
     socket.join(code);
 
+    pushLog(room, `👤 ${name} ha creato la stanza ed è il Pensatore`);
     io.to(code).emit('room:state', publicRoomState(room));
-    io.to(code).emit('log:message', `👤 ${name} ha creato la stanza ed è il Pensatore`);
     io.emit('rooms:update', listRooms());
   });
 
   socket.on('room:join', ({ code, name }) => {
     const room = rooms.get(code);
     if (!room) return socket.emit('system:error', 'Stanza non trovata');
-    if (room.status !== 'waiting') return socket.emit('system:error', 'Partita già iniziata');
+
     room.players.set(socket.id, { name, role: 'guesser' });
     socket.join(code);
 
+    // invio storico log e chat al nuovo giocatore
+    socket.emit('log:history', room.logs);
+    socket.emit('chat:history', room.chat);
+
+    pushLog(room, `👋 ${name} è entrato nella stanza`);
     io.to(code).emit('room:state', publicRoomState(room));
-    io.to(code).emit('log:message', `👋 ${name} è entrato nella stanza`);
     io.emit('rooms:update', listRooms());
   });
 
@@ -63,9 +69,7 @@ io.on('connection', (socket) => {
     room.players.delete(socket.id);
     socket.leave(code);
 
-    if (player) {
-      io.to(code).emit('log:message', `🚪 ${player.name} ha lasciato la stanza`);
-    }
+    if (player) pushLog(room, `🚪 ${player.name} ha lasciato la stanza`);
 
     if (room.players.size === 0) {
       rooms.delete(code);
@@ -99,9 +103,9 @@ io.on('connection', (socket) => {
       io.to(code).emit('turn:now', { socketId: nextId, name: room.players.get(nextId)?.name });
     }
 
+    pushLog(room, '▶️ Round iniziato!');
     io.emit('rooms:update', listRooms());
     io.to(code).emit('room:state', publicRoomState(room));
-    io.to(code).emit('log:message', '▶️ Round iniziato!');
   });
 
   socket.on('question:ask', ({ code, text }) => {
@@ -149,7 +153,7 @@ io.on('connection', (socket) => {
       if (room.guessAttempts[socket.id] <= 0) return;
 
       room.guessAttempts[socket.id]--;
-      io.to(code).emit('log:message',
+      pushLog(room,
         `${room.players.get(socket.id)?.name} ha tentato: "${guess}" ${correct ? '✅' : '❌'} — Tentativi rimasti: ${room.guessAttempts[socket.id]}`
       );
       if (correct) return endRoundAndRotate(code, `${room.players.get(socket.id)?.name} ha indovinato!`);
@@ -169,7 +173,9 @@ io.on('connection', (socket) => {
   socket.on('chat:message', ({ code, name, text }) => {
     const room = rooms.get(code);
     if (!room) return;
-    io.to(code).emit('chat:message', { name, text });
+    const msg = { name, text };
+    room.chat.push(msg);
+    io.to(code).emit('chat:message', msg);
   });
 
   socket.on('disconnect', () => {
@@ -177,9 +183,7 @@ io.on('connection', (socket) => {
       if (!room.players.has(socket.id)) continue;
       const player = room.players.get(socket.id);
       room.players.delete(socket.id);
-      if (player) {
-        io.to(code).emit('log:message', `🚪 ${player.name} si è disconnesso`);
-      }
+      if (player) pushLog(room, `🚪 ${player.name} si è disconnesso`);
       if (socket.id === room.thinkerSocketId) {
         io.to(code).emit('system:error', 'Il Pensatore ha lasciato la stanza. Round terminato.');
         rooms.delete(code);
@@ -199,7 +203,7 @@ io.on('connection', (socket) => {
     for (const [id] of room.players) {
       if (id !== room.thinkerSocketId) room.guessAttempts[id] = 2;
     }
-    io.to(code).emit('log:message', '🔔 Domande finite! Ogni giocatore ha 2 tentativi per indovinare.');
+    pushLog(room, '🔔 Domande finite! Ogni giocatore ha 2 tentativi per indovinare.');
   }
 
   function endRoundAndRotate(code, message) {
@@ -218,6 +222,7 @@ io.on('connection', (socket) => {
     room.guesses = [];
     room.asked = 0;
     room.guessAttempts = null;
+    pushLog(room, message);
     io.to(code).emit('room:state', publicRoomState(room));
     io.emit('rooms:update', listRooms());
   }
@@ -245,6 +250,11 @@ io.on('connection', (socket) => {
   }
   function listRooms() {
     return Array.from(rooms.values()).map(r => ({ code: r.code, players: r.players.size, status: r.status }));
+  }
+
+  function pushLog(room, message) {
+    room.logs.push(message);
+    io.to(room.code).emit('log:message', message);
   }
 });
 
