@@ -1,114 +1,88 @@
 <!doctype html>
-<html lang="it">
+<html>
 <head>
   <meta charset="utf-8" />
   <title>20Q Multiplayer</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
-    body { font-family: system-ui, sans-serif; margin:0; background:#f4f6f8; }
-    .container { max-width: 900px; margin:24px auto; background:white; padding:24px; border-radius:12px; box-shadow:0 4px 12px rgba(0,0,0,0.1); }
-    h1 { text-align:center; }
-    .row { display:flex; flex-wrap:wrap; gap:8px; margin:8px 0; align-items: center; }
-    input, button { padding:10px; border-radius:8px; border:1px solid #ccc; }
-    input { flex: 1 1 auto; min-width: 160px; }
-    button { cursor:pointer; border:none; font-weight:600; }
-    button.primary { background:#2d7ef7; color:white; }
-    button.primary:hover { background:#1f64c4; }
-    button.secondary { background:#ecf0f1; }
-    .pill { padding:4px 10px; border-radius:999px; background:#f0f0f0; }
-    .log { border:1px solid #ddd; border-radius:8px; padding:12px; height:200px; overflow-y:auto; background:#fafafa; font-size:14px; margin-top:12px; }
-    .hidden { display:none; }
-    .progress { background:#eee; border-radius:8px; overflow:hidden; height:16px; flex:1; }
-    .progress-bar { background:#2d7ef7; height:100%; width:0%; transition:width 0.3s; }
-
-    /* Overlay Pensatore */
-    #overlay {
-      position: fixed; inset:0;
-      background:rgba(0,0,0,0.8); color:white;
-      display:none; flex-direction:column; justify-content:center; align-items:center;
-      z-index:1000; text-align:center; padding:20px;
-    }
-    #overlay h2 { margin-bottom:12px; }
-    #overlay .buttons { display:flex; gap:16px; margin-top:20px; flex-wrap: wrap; justify-content: center; }
-    #overlay button { font-size:20px; padding:20px 40px; border-radius:12px; }
-    #overlay button.primary { background:#2ecc71; }
-    #overlay button.danger { background:#e74c3c; color:white; }
-    #overlay button.secondary { background:#95a5a6; color:white; }
-    @media (max-width: 520px) {
-      #overlay button { width: 100%; max-width: 320px; }
-    }
-
-    /* Rooms list cards */
-    .room-item { display:flex; gap:8px; align-items:center; padding:8px 0; border-bottom:1px dashed #eee; }
-    .room-item:last-child { border-bottom:none; }
-    .room-code { font-weight:700; }
-    .muted { color:#6b7280; font-size: 0.95em; }
+    body { font-family: system-ui, sans-serif; margin: 0; background: linear-gradient(135deg,#f9fafb,#e5e7eb); color:#111; }
+    .container { max-width: 900px; margin: 0 auto; padding: 16px; }
+    h1 { text-align:center; margin:16px 0; }
+    .card { background:white; border-radius:12px; padding:16px; margin:12px 0; box-shadow:0 2px 6px rgba(0,0,0,0.1); }
+    .row { display:flex; gap:8px; margin:8px 0; flex-wrap:wrap; }
+    input, button { padding:8px 12px; border-radius:8px; border:1px solid #ccc; font-size:14px; }
+    button { background:#2563eb; color:white; border:none; cursor:pointer; transition:background 0.2s; }
+    button:hover { background:#1e40af; }
+    .pill { padding:2px 8px; border-radius:999px; background:#f3f4f6; }
+    .log, .chat-box { border:1px solid #ddd; border-radius:8px; padding:12px; height:200px; overflow:auto; background:#fafafa; }
+    .progress { height:20px; border-radius:8px; overflow:hidden; background:#e5e7eb; margin-top:8px; }
+    .progress-bar { height:100%; background:#2563eb; width:0%; transition:width 0.3s; }
+    .hidden { display:none !important; }
+    #overlay { position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.85); display:none; justify-content:center; align-items:center; z-index:1000; color:white; text-align:center; padding:20px; }
+    #overlay .content { background:#111; padding:24px; border-radius:12px; max-width:500px; }
+    #overlay h2 { margin-bottom:16px; }
+    #overlay button { margin:4px; font-size:18px; padding:12px 20px; }
   </style>
 </head>
 <body>
   <div class="container">
+    <h1>20Q Multiplayer</h1>
 
-    <!-- Home -->
-    <div id="homeView">
-      <h1>20Q Multiplayer</h1>
+    <!-- HOME -->
+    <div id="home" class="card">
       <div class="row">
-        <input id="nameHome" placeholder="Il tuo nome" />
-        <input id="codeHome" placeholder="Codice stanza (es. ABCD)" />
-        <button id="createHome" class="primary">Crea stanza</button>
+        <input id="name" placeholder="Il tuo nome" />
+        <input id="code" placeholder="Codice stanza (es. ABCD)" />
+        <button id="create">Crea (Pensatore)</button>
       </div>
       <h3>Stanze attive</h3>
-      <div id="roomsList" class="muted">Caricamento…</div>
+      <div id="rooms"></div>
     </div>
 
-    <!-- Gioco -->
-    <div id="gameView" class="hidden">
+    <!-- GAME -->
+    <div id="game" class="card hidden">
       <div class="row">
-        <button id="leaveRoom" class="secondary">⬅️ Esci</button>
+        <button id="leave">⬅️ Esci</button>
+        <span class="pill">Turno: <span id="turn">–</span></span>
+        <span class="pill">Domande: <span id="qcount">0</span>/<span id="qmax">20</span></span>
       </div>
 
-      <div class="row" id="thinkerRow" style="display:none;">
+      <div class="progress"><div class="progress-bar" id="progress"></div></div>
+
+      <div id="thinker" class="row hidden">
         <input id="secret" placeholder="Parola segreta" />
-        <button id="start" class="primary">Avvia round</button>
+        <button id="start">Avvia round</button>
       </div>
 
-      <div class="row">
-        <span>Turno: <span id="turn" class="pill">–</span></span>
-      </div>
-
-      <div class="row">
-        <span id="questionCounter">Domande: 0/0</span>
-        <div class="progress"><div id="progressBar" class="progress-bar"></div></div>
-      </div>
-
-      <div class="row" id="actionsRow">
+      <div id="actions" class="row">
         <input id="question" placeholder="Fai una domanda sì/no" />
-        <button id="ask" class="secondary">❓ Chiedi</button>
+        <button id="ask">Chiedi</button>
         <input id="guess" placeholder="Tenta la risposta" />
-        <button id="submitGuess" class="primary">🎯 Indovina</button>
+        <button id="submitGuess">Indovina</button>
       </div>
 
+      <h3>Log</h3>
       <div class="log" id="log"></div>
 
-      <div>
-        <h3>💬 Chat</h3>
-        <div class="log" id="chatLog"></div>
-        <div class="row">
-          <input id="chatInput" placeholder="Scrivi un messaggio..." />
-          <button id="chatSend" class="primary">Invia</button>
-        </div>
+      <h3>Chat</h3>
+      <div class="chat-box" id="chat"></div>
+      <div class="row">
+        <input id="chatInput" placeholder="Scrivi un messaggio..." style="flex:1;" />
+        <button id="sendChat">Invia</button>
       </div>
     </div>
-
   </div>
 
-  <!-- Overlay risposta pensatore -->
+  <!-- Overlay per il pensatore -->
   <div id="overlay">
-    <h2 id="overlaySecret"></h2>
-    <h3 id="overlayQuestion"></h3>
-    <div class="buttons">
-      <button onclick="sendOverlayAnswer('Sì')" class="primary">Sì</button>
-      <button onclick="sendOverlayAnswer('No')" class="danger">No</button>
-      <button onclick="sendOverlayAnswer('Non so')" class="secondary">Non so</button>
+    <div class="content">
+      <h2 id="overlay-question">Domanda</h2>
+      <p id="overlay-secret"></p>
+      <div>
+        <button onclick="sendAnswer('Sì')">Sì</button>
+        <button onclick="sendAnswer('No')">No</button>
+        <button onclick="sendAnswer('Non so')">Non so</button>
+      </div>
     </div>
   </div>
 
@@ -118,136 +92,126 @@
     let roomCode = null;
     let me = { id: null, name: null, role: null };
     let lastQuestionId = null;
-    let maxQuestions = 0, asked = 0;
-    let secretWord = null;
-
     const $ = (id) => document.getElementById(id);
-    const log = (msg) => { const d = document.createElement('div'); d.textContent = msg; $('log').appendChild(d); $('log').scrollTop = $('log').scrollHeight; };
-    const chatLog = (msg) => { const d = document.createElement('div'); d.textContent = msg; $('chatLog').appendChild(d); $('chatLog').scrollTop = $('chatLog').scrollHeight; };
 
-    function show(view) {
-      $('homeView').classList.add('hidden');
-      $('gameView').classList.add('hidden');
-      $(view).classList.remove('hidden');
+    function appendLog(msg) {
+      const d = document.createElement('div'); d.textContent = msg;
+      $('log').appendChild(d); $('log').scrollTop = $('log').scrollHeight;
+    }
+    function appendChat(name, text) {
+      const d = document.createElement('div'); d.innerHTML = '<b>'+name+':</b> '+text;
+      $('chat').appendChild(d); $('chat').scrollTop = $('chat').scrollHeight;
     }
 
-    // Overlay
-    function showOverlay(questionText) {
-      $('overlaySecret').textContent = 'Parola segreta: ' + (secretWord || '–');
-      $('overlayQuestion').textContent = 'Domanda: ' + questionText;
-      $('overlay').style.display = 'flex';
-    }
-    function hideOverlay() { $('overlay').style.display = 'none'; }
-    function sendOverlayAnswer(ans) {
-      if (!lastQuestionId) return;
-      socket.emit('question:answer', { code: roomCode, id: lastQuestionId, answer: ans });
-      lastQuestionId = null;
-      hideOverlay();
-    }
-
-    function updateCounter(a, m) {
-      $('questionCounter').textContent = `Domande: ${a}/${m}`;
-      $('progressBar').style.width = (m ? (a / m * 100) : 0) + '%';
+    function sendAnswer(ans) {
+      if (lastQuestionId) {
+        socket.emit('question:answer', { code: roomCode, id: lastQuestionId, answer: ans });
+        lastQuestionId = null;
+        $('overlay').style.display = 'none';
+      }
     }
 
     // Home
-    $('createHome').onclick = () => {
-      me.name = $('nameHome').value || 'Anon';
-      roomCode = ($('codeHome').value || 'ABCD').toUpperCase();
+    $('create').onclick = () => {
+      me.name = $('name').value || 'Anon';
+      roomCode = ($('code').value || 'ABCD').toUpperCase();
       socket.emit('room:create', { code: roomCode, name: me.name });
     };
-    function joinRoom(code) {
-      me.name = $('nameHome').value || 'Anon';
-      roomCode = code;
-      socket.emit('room:join', { code: roomCode, name: me.name });
-    }
-    $('leaveRoom').onclick = () => {
+    $('leave').onclick = () => {
       socket.emit('room:leave', { code: roomCode });
-      roomCode = null;
-      show('homeView');
-      socket.emit('rooms:list'); // aggiorna la home
+      $('game').classList.add('hidden');
+      $('home').classList.remove('hidden');
+      $('log').innerHTML = '';
+      $('chat').innerHTML = '';
     };
 
-    // Actions
+    // Gameplay
     $('start').onclick = () => socket.emit('round:start', { code: roomCode, secretWord: $('secret').value });
     $('ask').onclick = () => { const t = $('question').value.trim(); if (t) socket.emit('question:ask', { code: roomCode, text: t }); $('question').value = ''; };
     $('submitGuess').onclick = () => { const t = $('guess').value.trim(); if (t) socket.emit('guess:submit', { code: roomCode, text: t }); $('guess').value = ''; };
-    $('chatSend').onclick = () => { const msg = $('chatInput').value.trim(); if (msg) { socket.emit('chat:message', { code: roomCode, name: me.name, text: msg }); $('chatInput').value = ''; } };
 
-    // Sockets
-    socket.on('connect', () => { me.id = socket.id; socket.emit('rooms:list'); });
+    $('sendChat').onclick = () => {
+      const text = $('chatInput').value.trim();
+      if (text) {
+        socket.emit('chat:message', { code: roomCode, name: me.name, text });
+        $('chatInput').value = '';
+      }
+    };
 
+    // Socket events
+    socket.on('connect', () => { me.id = socket.id; });
+    socket.on('system:error', (m) => appendLog('❗ ' + m));
     socket.on('rooms:update', (list) => {
-      const container = $('roomsList');
-      container.innerHTML = '';
-      if (!list || list.length === 0) { container.textContent = 'Nessuna stanza attiva'; return; }
+      $('rooms').innerHTML = '';
       list.forEach(r => {
         const div = document.createElement('div');
-        div.className = 'room-item';
-        const code = document.createElement('span'); code.className = 'room-code'; code.textContent = r.code;
-        const meta = document.createElement('span'); meta.className = 'muted'; meta.textContent = ` — ${r.players} giocatori (${r.status}) `;
-        const btn = document.createElement('button'); btn.textContent = 'Entra'; btn.onclick = () => joinRoom(r.code);
-        div.appendChild(code); div.appendChild(meta); div.appendChild(btn);
-        container.appendChild(div);
+        div.className = 'row';
+        div.innerHTML = `<span>Stanza <b>${r.code}</b> — Giocatori: ${r.players} — Stato: ${r.status}</span>`;
+        const btn = document.createElement('button');
+        btn.textContent = 'Entra';
+        btn.onclick = () => {
+          me.name = $('name').value || 'Anon';
+          roomCode = r.code;
+          socket.emit('room:join', { code: roomCode, name: me.name });
+        };
+        div.appendChild(btn);
+        $('rooms').appendChild(div);
       });
     });
 
     socket.on('room:state', (s) => {
-      show('gameView');
+      $('home').classList.add('hidden');
+      $('game').classList.remove('hidden');
+      $('qmax').textContent = s.maxQuestions;
       const meEntry = s.players.find(p => p.id === me.id);
       if (meEntry) me.role = meEntry.role;
-
-      // mostra i controlli del pensatore SOLO se thinker e in waiting
-      const isThinkerWaiting = (me.role === 'thinker' && s.status === 'waiting');
-      $('thinkerRow').style.display = isThinkerWaiting ? 'flex' : 'none';
-      $('start').style.display = isThinkerWaiting ? 'inline-block' : 'none';
-      $('secret').disabled = !isThinkerWaiting;
-      if (isThinkerWaiting) { $('secret').value = ''; }
-
-      // il pensatore non deve poter fare domande/indovinare
-      $('actionsRow').style.display = (me.role === 'thinker') ? 'none' : 'flex';
+      $('thinker').classList.toggle('hidden', me.role !== 'thinker');
+      $('actions').classList.toggle('hidden', me.role === 'thinker');
+      $('start').classList.toggle('hidden', s.status !== 'waiting');
+      appendLog(`👥 Stanza ${s.code} — giocatori: ${s.players.map(p=>p.name + (p.role==='thinker'?'(P)':'')).join(', ')}`);
     });
 
-    socket.on('round:started', ({ maxQuestions: mq }) => {
-      maxQuestions = mq; asked = 0;
-      updateCounter(asked, maxQuestions);
-      $('log').innerHTML = '';
-      log('▶️ Round iniziato!');
-      // nascondi bottone avvia per il pensatore
-      $('start').style.display = 'none';
-      $('secret').disabled = true;
+    socket.on('round:started', ({ maxQuestions, players }) => {
+      $('qcount').textContent = 0;
+      $('progress').style.width = '0%';
+      appendLog('▶️ Round iniziato! Max ' + maxQuestions + ' domande.');
+      $('start').classList.add('hidden');
     });
 
-    socket.on('round:secret', ({ secretWord: sw }) => { secretWord = sw; });
-
+    socket.on('round:secret', ({ secretWord }) => appendLog('🔒 Sei Pensatore. Parola: ' + secretWord));
+    socket.on('question:new', (q) => {
+      $('qcount').textContent = q.id;
+      $('progress').style.width = (parseInt($('qcount').textContent)/parseInt($('qmax').textContent)*100)+'%';
+      appendLog(`❓ (${q.byName}) ${q.text}`);
+      if (me.role === 'thinker') {
+        lastQuestionId = q.id;
+        $('overlay-question').textContent = q.text;
+        $('overlay-secret').textContent = 'Parola: ' + ($('secret').value || '(segreta)');
+        $('overlay').style.display = 'flex';
+      }
+    });
+    socket.on('question:update', (q) => { appendLog(`🗣️ Risposta: ${q.answer}`); });
     socket.on('turn:now', ({ socketId, name }) => {
       $('turn').textContent = socketId === me.id ? 'TU' : (name || '–');
-      if (me.id === socketId) log('🎲 È il tuo turno!');
     });
-
-    socket.on('question:new', (q) => {
-      log(`❓ ${q.byName}: ${q.text}`);
-      if (me.role === 'thinker') { lastQuestionId = q.id; showOverlay(q.text); }
-    });
-
-    socket.on('question:update', (q) => { log(`➡️ Risposta: ${q.answer}`); });
-
-    socket.on('guess:new', (g) => { log(`🎯 ${g.name} tenta: "${g.text}" ${g.correct ? '✅' : '❌'}`); });
-
-    socket.on('counter:update', ({ asked: count, max }) => {
-      asked = count; updateCounter(asked, max);
-    });
-
-    socket.on('log:message', (m) => log(m));
-
+    socket.on('guess:new', (g) => appendLog(`🎯 ${g.name} ha tentato: "${g.text}" ${g.correct ? '✅' : '❌'}`));
     socket.on('round:ended', ({ message, secretWord }) => {
-      log(`🏁 Fine round: ${message}. La parola era "${secretWord}"`);
-      // dopo questo arriva un room:state con status=waiting e pensatore ruotato
+      appendLog('🏁 ' + message + ` (Parola: ${secretWord})`);
+      $('start').classList.remove('hidden');
     });
 
-    socket.on('chat:message', ({ name, text }) => { chatLog(`${name}: ${text}`); });
+    socket.on('counter:update', ({ asked, max }) => {
+      $('qcount').textContent = asked;
+      $('progress').style.width = (asked/max*100)+'%';
+    });
 
-    socket.on('system:error', (m) => { log('❗ ' + m); alert(m); });
+    // Chat
+    socket.on('chat:message', ({ name, text }) => appendChat(name, text));
+    socket.on('chat:history', (msgs) => { msgs.forEach(m => appendChat(m.name, m.text)); });
+
+    // Log
+    socket.on('log:message', (m) => appendLog(m));
+    socket.on('log:history', (msgs) => { msgs.forEach(m => appendLog(m)); });
   </script>
 </body>
 </html>
