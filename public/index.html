@@ -22,6 +22,13 @@
     #overlay .content { background:#111; padding:24px; border-radius:12px; max-width:500px; }
     #overlay h2 { margin-bottom:16px; }
     #overlay button { margin:4px; font-size:18px; padding:12px 20px; }
+
+    /* Overlay fine partita */
+    #endOverlay { position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.85); display:none; justify-content:center; align-items:center; z-index:2000; }
+    #endOverlay .content { text-align:center; font-size:32px; font-weight:bold; padding:40px; border-radius:16px; animation: pop 0.6s ease forwards; }
+    #endOverlay.win .content { background:#16a34a; color:white; }
+    #endOverlay.lose .content { background:#dc2626; color:white; }
+    @keyframes pop { from { transform:scale(0.5); opacity:0; } to { transform:scale(1); opacity:1; } }
   </style>
 </head>
 <body>
@@ -86,6 +93,9 @@
     </div>
   </div>
 
+  <!-- Overlay fine partita -->
+  <div id="endOverlay"><div class="content" id="endMessage"></div></div>
+
   <script src="/socket.io/socket.io.js"></script>
   <script>
     const socket = io();
@@ -111,7 +121,6 @@
       }
     }
 
-    // Home
     $('create').onclick = () => {
       me.name = $('name').value || 'Anon';
       roomCode = ($('code').value || 'ABCD').toUpperCase();
@@ -125,7 +134,6 @@
       $('chat').innerHTML = '';
     };
 
-    // Gameplay
     $('start').onclick = () => socket.emit('round:start', { code: roomCode, secretWord: $('secret').value });
     $('ask').onclick = () => { const t = $('question').value.trim(); if (t) socket.emit('question:ask', { code: roomCode, text: t }); $('question').value = ''; };
     $('submitGuess').onclick = () => { const t = $('guess').value.trim(); if (t) socket.emit('guess:submit', { code: roomCode, text: t }); $('guess').value = ''; };
@@ -138,7 +146,6 @@
       }
     };
 
-    // Socket events
     socket.on('connect', () => { me.id = socket.id; });
     socket.on('system:error', (m) => appendLog('❗ ' + m));
 
@@ -200,18 +207,28 @@
       $('turn').textContent = socketId === me.id ? 'TU' : (name || '–');
     });
     socket.on('guess:new', (g) => appendLog(`🎯 ${g.name} ha tentato: "${g.text}" ${g.correct ? '✅' : '❌'}`));
-    socket.on('round:ended', ({ message, secretWord }) => {
+    socket.on('round:ended', ({ message, secretWord, winnerId }) => {
       appendLog('🏁 ' + message + ` (Parola: ${secretWord})`);
       $('start').classList.remove('hidden');
+
+      let isWin = false;
+      if (me.role === 'thinker') {
+        isWin = !winnerId; // vince se nessuno indovina
+      } else {
+        isWin = (winnerId === me.id); // vince solo se ha indovinato lui
+      }
+
+      $('endOverlay').className = isWin ? 'win' : 'lose';
+      $('endMessage').textContent = isWin ? '🎉 Vittoria!' : '💀 Sconfitta';
+      $('endOverlay').style.display = 'flex';
+      setTimeout(() => { $('endOverlay').style.display = 'none'; }, 4000);
     });
 
-    // Contatore domande: SOLO server decide
     socket.on('counter:update', ({ asked, max }) => {
       $('qcount').textContent = asked;
       $('progress').style.width = (asked/max*100)+'%';
     });
 
-    // Chat & Log
     socket.on('chat:message', ({ name, text }) => appendChat(name, text));
     socket.on('chat:history', (msgs) => { msgs.forEach(m => appendChat(m.name, m.text)); });
     socket.on('log:message', (m) => appendLog(m));
