@@ -183,7 +183,10 @@
     };
 
     // Socket events
-    socket.on('connect', () => { me.id = socket.id; });
+    socket.on('connect', () => { 
+      me.id = socket.id; 
+      socket.emit('rooms:list'); // 👈 chiedi subito la lista stanze
+    });
     socket.on('system:error', (m) => appendLog('❗ ' + m));
 
     socket.on('rooms:update', (list) => {
@@ -265,7 +268,7 @@
       showEndOverlay(text, victory ? 'victory' : 'defeat');
     });
 
-    // Contatore domande: SOLO server decide
+    // Contatore domande
     socket.on('counter:update', ({ asked, max }) => {
       $('qcount').textContent = asked;
       $('progress').style.width = (asked/max*100)+'%';
