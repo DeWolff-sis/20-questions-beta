@@ -15,7 +15,7 @@ function createRoom(code) {
   rooms.set(code, {
     code,
     status: 'waiting',
-    players: new Map(),
+    players: new Map(), // socketId -> { name, role }
     thinkerSocketId: null,
     secretWord: null,
     questions: [],
@@ -70,10 +70,23 @@ io.on('connection', (socket) => {
 
     if (player) pushLog(room, `🚪 ${player.name} ha lasciato la stanza`);
 
-    if (room.players.size === 0) {
+    if (socket.id === room.thinkerSocketId) {
+      // Pensatore esce → round finisce rivelando la parola
+      io.to(code).emit('round:ended', {
+        message: 'Il Pensatore ha lasciato la stanza. Round terminato.',
+        secretWord: room.secretWord,
+        questions: room.questions,
+        guesses: room.guesses,
+        winnerId: null
+      });
       rooms.delete(code);
     } else {
-      io.to(code).emit('room:state', publicRoomState(room));
+      handlePlayerExitDuringRound(room, socket.id);
+      if (room.players.size === 0) {
+        rooms.delete(code);
+      } else {
+        io.to(code).emit('room:state', publicRoomState(room));
+      }
     }
     io.emit('rooms:update', listRooms());
   });
@@ -156,7 +169,7 @@ io.on('connection', (socket) => {
       );
       if (correct) return endRoundAndRotate(code, `${room.players.get(socket.id)?.name} ha indovinato!`, socket.id);
       const allOut = Object.values(room.guessAttempts).every(x => x <= 0);
-      if (allOut) return endRoundAndRotate(code, 'Nessuno ha indovinato. Tentativi esauriti.');
+      if (allOut) return endRoundAndRotate(code, 'Nessuno ha indovinato. Tentativi esauriti.', null);
       return;
     }
 
@@ -182,16 +195,25 @@ io.on('connection', (socket) => {
       const player = room.players.get(socket.id);
       room.players.delete(socket.id);
       if (player) pushLog(room, `🚪 ${player.name} si è disconnesso`);
+
       if (socket.id === room.thinkerSocketId) {
-        io.to(code).emit('system:error', 'Il Pensatore ha lasciato la stanza. Round terminato.');
+        io.to(code).emit('round:ended', {
+          message: 'Il Pensatore ha lasciato la stanza. Round terminato.',
+          secretWord: room.secretWord,
+          questions: room.questions,
+          guesses: room.guesses,
+          winnerId: null
+        });
         rooms.delete(code);
       } else {
+        handlePlayerExitDuringRound(room, socket.id);
         io.to(code).emit('room:state', publicRoomState(room));
       }
     }
     io.emit('rooms:update', listRooms());
   });
 
+  // === Helpers ===
   function startGuessPhase(code) {
     const room = rooms.get(code);
     if (!room) return;
@@ -203,7 +225,7 @@ io.on('connection', (socket) => {
     pushLog(room, '🔔 Domande finite! Ogni giocatore ha 2 tentativi per indovinare.');
   }
 
-  function endRoundAndRotate(code, message, winnerId = null) {
+  function endRoundAndRotate(code, message, winnerId) {
     const room = rooms.get(code);
     if (!room) return;
     io.to(code).emit('round:ended', {
@@ -211,7 +233,7 @@ io.on('connection', (socket) => {
       secretWord: room.secretWord,
       questions: room.questions,
       guesses: room.guesses,
-      winnerId
+      winnerId: winnerId || null
     });
     rotateThinker(room);
     room.status = 'waiting';
@@ -253,6 +275,22 @@ io.on('connection', (socket) => {
   function pushLog(room, message) {
     room.logs.push(message);
     io.to(room.code).emit('log:message', message);
+  }
+
+  function handlePlayerExitDuringRound(room, socketId) {
+    // Rimuovi dal turno
+    const idx = room.turnOrder.indexOf(socketId);
+    if (idx !== -1) {
+      room.turnOrder.splice(idx, 1);
+      // Se era il turno di questo giocatore → passa al successivo
+      if (room.status === 'playing' && room.turnOrder.length > 0) {
+        if (room.turnIdx >= room.turnOrder.length) {
+          room.turnIdx = 0;
+        }
+        const nextId = room.turnOrder[room.turnIdx];
+        io.to(room.code).emit('turn:now', { socketId: nextId, name: room.players.get(nextId)?.name });
+      }
+    }
   }
 });
 
