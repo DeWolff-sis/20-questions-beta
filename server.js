@@ -15,7 +15,7 @@ function createRoom(code) {
   rooms.set(code, {
     code,
     status: 'waiting',
-    players: new Map(), // socketId -> { name, role }
+    players: new Map(),
     thinkerSocketId: null,
     secretWord: null,
     questions: [],
@@ -25,8 +25,8 @@ function createRoom(code) {
     maxQuestions: 20,
     asked: 0,
     guessAttempts: null,
-    logs: [], // nuovo
-    chat: []  // nuovo
+    logs: [],
+    chat: []
   });
 }
 
@@ -53,7 +53,6 @@ io.on('connection', (socket) => {
     room.players.set(socket.id, { name, role: 'guesser' });
     socket.join(code);
 
-    // invio storico log e chat al nuovo giocatore
     socket.emit('log:history', room.logs);
     socket.emit('chat:history', room.chat);
 
@@ -79,7 +78,6 @@ io.on('connection', (socket) => {
     io.emit('rooms:update', listRooms());
   });
 
-  // === ROUND START / GAMEPLAY EVENTS ===
   socket.on('round:start', ({ code, secretWord }) => {
     const room = rooms.get(code);
     if (!room) return;
@@ -156,7 +154,7 @@ io.on('connection', (socket) => {
       pushLog(room,
         `${room.players.get(socket.id)?.name} ha tentato: "${guess}" ${correct ? '✅' : '❌'} — Tentativi rimasti: ${room.guessAttempts[socket.id]}`
       );
-      if (correct) return endRoundAndRotate(code, `${room.players.get(socket.id)?.name} ha indovinato!`);
+      if (correct) return endRoundAndRotate(code, `${room.players.get(socket.id)?.name} ha indovinato!`, socket.id);
       const allOut = Object.values(room.guessAttempts).every(x => x <= 0);
       if (allOut) return endRoundAndRotate(code, 'Nessuno ha indovinato. Tentativi esauriti.');
       return;
@@ -164,7 +162,7 @@ io.on('connection', (socket) => {
 
     room.guesses.push({ by: socket.id, text: guess, correct });
     io.to(code).emit('guess:new', { by: socket.id, name: room.players.get(socket.id)?.name, text: guess, correct });
-    if (correct) return endRoundAndRotate(code, `${room.players.get(socket.id)?.name} ha indovinato!`);
+    if (correct) return endRoundAndRotate(code, `${room.players.get(socket.id)?.name} ha indovinato!`, socket.id);
     room.asked++;
     io.to(code).emit('counter:update', { asked: room.asked, max: room.maxQuestions });
     if (room.asked >= room.maxQuestions) startGuessPhase(code);
@@ -194,7 +192,6 @@ io.on('connection', (socket) => {
     io.emit('rooms:update', listRooms());
   });
 
-  // === Helpers ===
   function startGuessPhase(code) {
     const room = rooms.get(code);
     if (!room) return;
@@ -206,14 +203,15 @@ io.on('connection', (socket) => {
     pushLog(room, '🔔 Domande finite! Ogni giocatore ha 2 tentativi per indovinare.');
   }
 
-  function endRoundAndRotate(code, message) {
+  function endRoundAndRotate(code, message, winnerId = null) {
     const room = rooms.get(code);
     if (!room) return;
     io.to(code).emit('round:ended', {
       message,
       secretWord: room.secretWord,
       questions: room.questions,
-      guesses: room.guesses
+      guesses: room.guesses,
+      winnerId
     });
     rotateThinker(room);
     room.status = 'waiting';
