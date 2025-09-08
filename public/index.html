@@ -9,7 +9,7 @@
     .container { max-width: 900px; margin: 0 auto; padding: 16px; }
     h1 { text-align:center; margin:16px 0; }
     .card { background:white; border-radius:12px; padding:16px; margin:12px 0; box-shadow:0 2px 6px rgba(0,0,0,0.1); }
-    .row { display:flex; gap:8px; margin:8px 0; flex-wrap:wrap; }
+    .row { display:flex; gap:8px; margin:8px 0; flex-wrap:wrap; align-items:center; }
     input, button { padding:8px 12px; border-radius:8px; border:1px solid #ccc; font-size:14px; }
     button { background:#2563eb; color:white; border:none; cursor:pointer; transition:background 0.2s; }
     button:hover { background:#1e40af; }
@@ -20,33 +20,23 @@
     .hidden { display:none !important; }
     #overlay { position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.85); display:none; justify-content:center; align-items:center; z-index:1000; color:white; text-align:center; padding:20px; }
     #overlay .content { background:#111; padding:24px; border-radius:12px; max-width:500px; }
-    #overlay h2 { margin-bottom:16px; }
-    #overlay button { margin:4px; font-size:18px; padding:12px 20px; }
-
+    #overlay h2 { margin-bottom:8px; }
+    #overlay p { margin-bottom:12px; color:#ddd; }
+    #overlay button { margin:4px; font-size:16px; padding:10px 14px; }
     /* Overlay fine partita */
-    #endOverlay {
-      position: fixed; top:0; left:0; right:0; bottom:0;
-      background: rgba(0,0,0,0.85); color:white;
-      display:none; justify-content:center; align-items:center;
-      z-index:2000; text-align:center; padding:20px;
-    }
-    #endOverlay .message {
-      padding:24px; border-radius:16px; font-size:24px;
-      animation: pop 0.6s ease;
-    }
-    #endOverlay.victory .message { background:green; }
-    #endOverlay.defeat .message { background:red; }
-    @keyframes pop {
-      from { transform:scale(0.5); opacity:0; }
-      to { transform:scale(1); opacity:1; }
-    }
-    #endOverlay button {
-      margin-top:12px;
-      padding:8px 16px;
-      border:none; border-radius:8px;
-      font-size:16px;
-      cursor:pointer;
-    }
+    #endOverlay { position:fixed; top:0; left:0; right:0; bottom:0; display:none; justify-content:center; align-items:center; background:rgba(0,0,0,0.85); z-index:2000; color:white; text-align:center; padding:20px; }
+    #endOverlay .content { padding:24px; border-radius:16px; animation:pop 0.6s ease; max-width:520px; }
+    #endOverlay.win .content { background:linear-gradient(135deg,#16a34a,#4ade80); }
+    #endOverlay.lose .content { background:linear-gradient(135deg,#dc2626,#f87171); }
+    #endOverlay h2 { font-size:28px; margin-bottom:8px; }
+    #endOverlay p { margin:0; }
+    @keyframes pop { from { transform:scale(0.7); opacity:0; } to { transform:scale(1); opacity:1; } }
+    /* Timer */
+    #turnTimer { height:18px; border-radius:8px; background:#e5e7eb; overflow:hidden; margin-top:8px; display:none; }
+    #turnTimer .bar { height:100%; background:#2563eb; width:100%; transition:width linear; }
+    #turnTimerLabel { font-size:14px; margin-top:6px; text-align:center; display:none; color:#374151; }
+    /* secret disabled look */
+    input[disabled] { background:#e5e7eb; color:#6b7280; cursor:not-allowed; }
   </style>
 </head>
 <body>
@@ -86,6 +76,10 @@
         <button id="submitGuess">Indovina</button>
       </div>
 
+      <!-- Timer -->
+      <div id="turnTimer"><div class="bar" id="turnTimerBar"></div></div>
+      <div id="turnTimerLabel"></div>
+
       <h3>Log</h3>
       <div class="log" id="log"></div>
 
@@ -104,18 +98,21 @@
       <h2 id="overlay-question">Domanda</h2>
       <p id="overlay-secret"></p>
       <div>
-        <button onclick="sendAnswer('Sì')">Sì</button>
-        <button onclick="sendAnswer('No')">No</button>
-        <button onclick="sendAnswer('Non so')">Non so</button>
+        <button id="ansYes">Sì</button>
+        <button id="ansNo">No</button>
+        <button id="ansIDK">Non so</button>
       </div>
     </div>
   </div>
 
   <!-- Overlay fine partita -->
   <div id="endOverlay">
-    <div class="message">
-      <span id="endText"></span><br/>
-      <button onclick="hideEndOverlay()">Chiudi</button>
+    <div class="content" id="endContent">
+      <h2 id="endTitle"></h2>
+      <p id="endMessage"></p>
+      <div style="margin-top:12px;">
+        <button onclick="document.getElementById('endOverlay').style.display='none'">Chiudi</button>
+      </div>
     </div>
   </div>
 
@@ -125,54 +122,101 @@
     let roomCode = null;
     let me = { id: null, name: null, role: null };
     let lastQuestionId = null;
-    const $ = (id) => document.getElementById(id);
+    let timerHideTimeout = null;
+    const $ = id => document.getElementById(id);
 
+    /* UI helpers */
     function appendLog(msg) {
       const d = document.createElement('div'); d.textContent = msg;
       $('log').appendChild(d); $('log').scrollTop = $('log').scrollHeight;
     }
     function appendChat(name, text) {
-      const d = document.createElement('div'); d.innerHTML = '<b>'+name+':</b> '+text;
+      const d = document.createElement('div'); d.innerHTML = '<b>'+escapeHtml(name)+':</b> '+escapeHtml(text);
       $('chat').appendChild(d); $('chat').scrollTop = $('chat').scrollHeight;
     }
+    function escapeHtml(s) { return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',\"'\":'&#39;'}[c])); }
 
+    /* Timer UI */
+    function startTurnTimer(durationMs, type) {
+      clearTurnTimerUI();
+      $('turnTimer').style.display = 'block';
+      $('turnTimerLabel').style.display = 'block';
+      $('turnTimerBar').style.transition = 'none';
+      $('turnTimerBar').style.width = '100%';
+      // animate to 0
+      setTimeout(() => {
+        $('turnTimerBar').style.transition = `width ${durationMs}ms linear`;
+        $('turnTimerBar').style.width = '0%';
+      }, 50);
+      $('turnTimerLabel').textContent = (type === 'ask') ? 'Hai 60 secondi per fare la domanda...' : (type === 'answer' ? 'Sei il Pensatore: 60s per rispondere...' : 'Tentativo bonus: 60s per indovinare...');
+      timerHideTimeout = setTimeout(() => clearTurnTimerUI(), durationMs);
+    }
+    function clearTurnTimerUI() {
+      if (timerHideTimeout) { clearTimeout(timerHideTimeout); timerHideTimeout = null; }
+      $('turnTimerBar').style.transition = 'none';
+      $('turnTimerBar').style.width = '100%';
+      $('turnTimer').style.display = 'none';
+      $('turnTimerLabel').style.display = 'none';
+    }
+    function stopTurnTimer() { clearTurnTimerUI(); }
+
+    /* End overlay */
+    function showEndOverlay(title, sub, win) {
+      $('endTitle').textContent = title;
+      $('endMessage').textContent = sub;
+      const el = $('endOverlay');
+      el.className = win ? 'win' : 'lose';
+      el.style.display = 'flex';
+    }
+
+    /* Overlay answer buttons */
     function sendAnswer(ans) {
-      if (lastQuestionId) {
-        socket.emit('question:answer', { code: roomCode, id: lastQuestionId, answer: ans });
-        lastQuestionId = null;
-        $('overlay').style.display = 'none';
-      }
+      if (!lastQuestionId || !roomCode) return;
+      socket.emit('question:answer', { code: roomCode, id: lastQuestionId, answer: ans });
+      lastQuestionId = null;
+      $('overlay').style.display = 'none';
+      stopTurnTimer();
     }
+    $('ansYes').onclick = () => sendAnswer('Sì');
+    $('ansNo').onclick = () => sendAnswer('No');
+    $('ansIDK').onclick = () => sendAnswer('Non so');
 
-    // Overlay fine partita helpers
-    function showEndOverlay(text, victoryClass=null) {
-      const overlay = $('endOverlay');
-      overlay.className = victoryClass ? victoryClass : '';
-      $('endText').textContent = text;
-      overlay.style.display = 'flex';
-    }
-    function hideEndOverlay() {
-      $('endOverlay').style.display = 'none';
-    }
-
-    // Home
+    /* Home actions */
     $('create').onclick = () => {
       me.name = $('name').value || 'Anon';
       roomCode = ($('code').value || 'ABCD').toUpperCase();
       socket.emit('room:create', { code: roomCode, name: me.name });
     };
     $('leave').onclick = () => {
+      if (!roomCode) return;
       socket.emit('room:leave', { code: roomCode });
+      roomCode = null;
+      me.role = null;
       $('game').classList.add('hidden');
       $('home').classList.remove('hidden');
       $('log').innerHTML = '';
       $('chat').innerHTML = '';
+      stopTurnTimer();
     };
 
-    // Gameplay
+    /* Gameplay actions */
     $('start').onclick = () => socket.emit('round:start', { code: roomCode, secretWord: $('secret').value });
-    $('ask').onclick = () => { const t = $('question').value.trim(); if (t) socket.emit('question:ask', { code: roomCode, text: t }); $('question').value = ''; };
-    $('submitGuess').onclick = () => { const t = $('guess').value.trim(); if (t) socket.emit('guess:submit', { code: roomCode, text: t }); $('guess').value = ''; };
+    $('ask').onclick = () => {
+      const t = $('question').value.trim();
+      if (t) {
+        socket.emit('question:ask', { code: roomCode, text: t });
+        $('question').value = '';
+        stopTurnTimer();
+      }
+    };
+    $('submitGuess').onclick = () => {
+      const t = $('guess').value.trim();
+      if (t) {
+        socket.emit('guess:submit', { code: roomCode, text: t });
+        $('guess').value = '';
+        stopTurnTimer();
+      }
+    };
 
     $('sendChat').onclick = () => {
       const text = $('chatInput').value.trim();
@@ -182,22 +226,19 @@
       }
     };
 
-    // Socket events
-    socket.on('connect', () => { 
-      me.id = socket.id; 
-      socket.emit('rooms:list'); // 👈 chiedi subito la lista stanze
-    });
+    /* Socket handlers */
+    socket.on('connect', () => { me.id = socket.id; socket.emit('rooms:list'); });
     socket.on('system:error', (m) => appendLog('❗ ' + m));
 
     socket.on('rooms:update', (list) => {
       $('rooms').innerHTML = '';
-      if (list.length === 0) {
+      if (!list || list.length === 0) {
         $('rooms').innerHTML = '<i>Nessuna stanza attiva al momento.</i>';
       } else {
         list.forEach(r => {
           const div = document.createElement('div');
           div.className = 'row';
-          div.innerHTML = `<span>Stanza <b>${r.code}</b> — Giocatori: ${r.players} — Stato: ${r.status}</span>`;
+          div.innerHTML = `<span>Stanza <b>${escapeHtml(r.code)}</b> — Giocatori: ${r.players} — Stato: ${escapeHtml(r.status)}</span>`;
           const btn = document.createElement('button');
           btn.textContent = 'Entra';
           btn.onclick = () => {
@@ -212,6 +253,7 @@
     });
 
     socket.on('room:state', (s) => {
+      // show game view
       $('home').classList.add('hidden');
       $('game').classList.remove('hidden');
       $('qmax').textContent = s.maxQuestions;
@@ -220,6 +262,9 @@
       $('thinker').classList.toggle('hidden', me.role !== 'thinker');
       $('actions').classList.toggle('hidden', me.role === 'thinker');
       $('start').classList.toggle('hidden', s.status !== 'waiting');
+      // disable secret input when not waiting
+      const secretInput = $('secret');
+      if (secretInput) secretInput.disabled = (s.status !== 'waiting');
       appendLog(`👥 Stanza ${s.code} — giocatori: ${s.players.map(p=>p.name + (p.role==='thinker'?'(P)':'')).join(', ')}`);
     });
 
@@ -234,6 +279,7 @@
 
     socket.on('question:new', (q) => {
       appendLog(`❓ (${q.byName}) ${q.text}`);
+      // If I'm thinker, show overlay and let me answer (server started answer timer)
       if (me.role === 'thinker') {
         lastQuestionId = q.id;
         $('overlay-question').textContent = q.text;
@@ -242,43 +288,64 @@
       }
     });
 
-    socket.on('question:update', (q) => { appendLog(`🗣️ Risposta: ${q.answer}`); });
+    socket.on('question:update', (q) => {
+      appendLog(`🗣️ Risposta: ${q.answer}`);
+      stopTurnTimer();
+      // hide overlay if it was open for thinker
+      if (me.role === 'thinker') $('overlay').style.display = 'none';
+    });
+
     socket.on('turn:now', ({ socketId, name }) => {
       $('turn').textContent = socketId === me.id ? 'TU' : (name || '–');
     });
-    socket.on('guess:new', (g) => appendLog(`🎯 ${g.name} ha tentato: "${g.text}" ${g.correct ? '✅' : '❌'}`));
+
+    socket.on('guess:new', (g) => {
+      appendLog(`🎯 ${g.name} ha tentato: "${g.text}" ${g.correct ? '✅' : '❌'}`);
+      stopTurnTimer();
+    });
 
     socket.on('round:ended', ({ message, secretWord, winnerId }) => {
       appendLog('🏁 ' + message + (secretWord ? ` (Parola: ${secretWord})` : ''));
       $('start').classList.remove('hidden');
+      stopTurnTimer();
 
-      // Overlay di vittoria/sconfitta
-      if (message.includes('Pensatore ha lasciato')) {
-        showEndOverlay(`${message} La parola era: ${secretWord}`);
-        return;
-      }
-      if (!me.role) return;
-      let victory = false;
-      if (me.role === 'thinker') {
-        victory = !winnerId; // Vince se nessuno ha indovinato
-      } else {
-        victory = winnerId === me.id; // Vince solo se lui ha indovinato
-      }
-      const text = (victory ? '🏆 Vittoria!' : '😢 Sconfitta!') + (secretWord ? ` La parola era: ${secretWord}` : '');
-      showEndOverlay(text, victory ? 'victory' : 'defeat');
+      // Determine win/lose for this client
+      let isWin = false;
+      if (winnerId) isWin = (winnerId === me.id);
+      else isWin = (me.role === 'thinker'); // fallback if server didn't pass winnerId
+
+      const title = isWin ? '🎉 Hai vinto!' : '💀 Hai perso';
+      const sub = message + (secretWord ? ` Parola: ${secretWord}` : '');
+      showEndOverlay(title, sub, isWin);
     });
 
-    // Contatore domande
     socket.on('counter:update', ({ asked, max }) => {
       $('qcount').textContent = asked;
       $('progress').style.width = (asked/max*100)+'%';
     });
 
-    // Chat & Log
+    // Timer: server sends timer:start to the specific target
+    socket.on('timer:start', ({ duration, type }) => {
+      // duration in ms
+      startTurnTimer(duration, type);
+    });
+
+    // Log & chat
     socket.on('chat:message', ({ name, text }) => appendChat(name, text));
     socket.on('chat:history', (msgs) => { msgs.forEach(m => appendChat(m.name, m.text)); });
     socket.on('log:message', (m) => appendLog(m));
     socket.on('log:history', (msgs) => { msgs.forEach(m => appendLog(m)); });
+
+    // Safety: stop UI timer on disconnect/others
+    socket.on('disconnect', () => stopTurnTimer());
+
+    // small helper to display end overlay
+    function showEndOverlay(title, sub, win) {
+      $('endTitle').textContent = title;
+      $('endMessage').textContent = sub;
+      $('endOverlay').className = win ? 'win' : 'lose';
+      $('endOverlay').style.display = 'flex';
+    }
   </script>
 </body>
 </html>
