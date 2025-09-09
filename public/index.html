@@ -37,6 +37,8 @@
     #turnTimerLabel { font-size:14px; margin-top:6px; text-align:center; display:none; color:#374151; }
     /* secret disabled look */
     input[disabled] { background:#e5e7eb; color:#6b7280; cursor:not-allowed; }
+    /* status */
+    #status { font-size:13px; color:#374151; margin-left:8px; }
   </style>
 </head>
 <body>
@@ -49,6 +51,7 @@
         <input id="name" placeholder="Il tuo nome" />
         <input id="code" placeholder="Codice stanza (es. ABCD)" />
         <button id="create">Crea (Pensatore)</button>
+        <span id="status">Connessione: <span id="statusText">—</span></span>
       </div>
       <h3>Stanze attive</h3>
       <div id="rooms"><i>Nessuna stanza attiva al momento.</i></div>
@@ -118,12 +121,15 @@
 
   <script src="/socket.io/socket.io.js"></script>
   <script>
+    /* Robust, complete client (v1.3) - derived from v1.2 */
     const socket = io();
     let roomCode = null;
     let me = { id: null, name: null, role: null };
     let lastQuestionId = null;
     let timerHideTimeout = null;
     const $ = id => document.getElementById(id);
+
+    function escapeHtml(s) { return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',\"'\":'&#39;'}[c])); }
 
     /* UI helpers */
     function appendLog(msg) {
@@ -134,7 +140,11 @@
       const d = document.createElement('div'); d.innerHTML = '<b>'+escapeHtml(name)+':</b> '+escapeHtml(text);
       $('chat').appendChild(d); $('chat').scrollTop = $('chat').scrollHeight;
     }
-    function escapeHtml(s) { return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',\"'\":'&#39;'}[c])); }
+    function setStatus(text, color) {
+      $('statusText').textContent = text;
+      if (color) $('statusText').style.color = color; else $('statusText').style.color = '#374151';
+      console.log('[status]', text);
+    }
 
     /* Timer UI */
     function startTurnTimer(durationMs, type) {
@@ -143,7 +153,6 @@
       $('turnTimerLabel').style.display = 'block';
       $('turnTimerBar').style.transition = 'none';
       $('turnTimerBar').style.width = '100%';
-      // animate to 0
       setTimeout(() => {
         $('turnTimerBar').style.transition = `width ${durationMs}ms linear`;
         $('turnTimerBar').style.width = '0%';
@@ -169,7 +178,7 @@
       el.style.display = 'flex';
     }
 
-    /* Overlay answer buttons */
+    /* Overlay answer */
     function sendAnswer(ans) {
       if (!lastQuestionId || !roomCode) return;
       socket.emit('question:answer', { code: roomCode, id: lastQuestionId, answer: ans });
@@ -177,17 +186,27 @@
       $('overlay').style.display = 'none';
       stopTurnTimer();
     }
+
+    /* Event listeners for overlay buttons */
     $('ansYes').onclick = () => sendAnswer('Sì');
     $('ansNo').onclick = () => sendAnswer('No');
     $('ansIDK').onclick = () => sendAnswer('Non so');
 
-    /* Home actions */
-    $('create').onclick = () => {
+    /* Home actions (create/join) */
+    $('create').addEventListener('click', () => {
       me.name = $('name').value || 'Anon';
       roomCode = ($('code').value || 'ABCD').toUpperCase();
+      if (!socket || !socket.connected) {
+        setStatus('Connessione assente — riconnettendo...', 'orange');
+      } else {
+        setStatus('Creazione stanza ' + roomCode + '...', 'blue');
+      }
+      console.log('emit room:create', { code: roomCode, name: me.name });
       socket.emit('room:create', { code: roomCode, name: me.name });
-    };
-    $('leave').onclick = () => {
+    });
+
+    // leave
+    $('leave').addEventListener('click', () => {
       if (!roomCode) return;
       socket.emit('room:leave', { code: roomCode });
       roomCode = null;
@@ -197,63 +216,69 @@
       $('log').innerHTML = '';
       $('chat').innerHTML = '';
       stopTurnTimer();
-    };
-
-    /* Gameplay actions */
-    $('start').onclick = () => socket.emit('round:start', { code: roomCode, secretWord: $('secret').value });
-    $('ask').onclick = () => {
-      const t = $('question').value.trim();
-      if (t) {
-        socket.emit('question:ask', { code: roomCode, text: t });
-        $('question').value = '';
-        stopTurnTimer();
-      }
-    };
-    $('submitGuess').onclick = () => {
-      const t = $('guess').value.trim();
-      if (t) {
-        socket.emit('guess:submit', { code: roomCode, text: t });
-        $('guess').value = '';
-        stopTurnTimer();
-      }
-    };
-
-    $('sendChat').onclick = () => {
-      const text = $('chatInput').value.trim();
-      if (text) {
-        socket.emit('chat:message', { code: roomCode, name: me.name, text });
-        $('chatInput').value = '';
-      }
-    };
-
-    /* Socket handlers */
-    socket.on('connect', () => { me.id = socket.id; socket.emit('rooms:list'); });
-    socket.on('system:error', (m) => appendLog('❗ ' + m));
-
-    socket.on('rooms:update', (list) => {
-      $('rooms').innerHTML = '';
-      if (!list || list.length === 0) {
-        $('rooms').innerHTML = '<i>Nessuna stanza attiva al momento.</i>';
-      } else {
-        list.forEach(r => {
-          const div = document.createElement('div');
-          div.className = 'row';
-          div.innerHTML = `<span>Stanza <b>${escapeHtml(r.code)}</b> — Giocatori: ${r.players} — Stato: ${escapeHtml(r.status)}</span>`;
-          const btn = document.createElement('button');
-          btn.textContent = 'Entra';
-          btn.onclick = () => {
-            me.name = $('name').value || 'Anon';
-            roomCode = r.code;
-            socket.emit('room:join', { code: roomCode, name: me.name });
-          };
-          div.appendChild(btn);
-          $('rooms').appendChild(div);
-        });
-      }
     });
 
+    /* Gameplay actions */
+    $('start').addEventListener('click', () => socket.emit('round:start', { code: roomCode, secretWord: $('secret').value || '' }));
+    $('ask').addEventListener('click', () => {
+      const t = $('question').value.trim();
+      if (t) { socket.emit('question:ask', { code: roomCode, text: t }); $('question').value = ''; stopTurnTimer(); }
+    });
+    $('submitGuess').addEventListener('click', () => {
+      const t = $('guess').value.trim();
+      if (t) { socket.emit('guess:submit', { code: roomCode, text: t }); $('guess').value = ''; stopTurnTimer(); }
+    });
+    $('sendChat').addEventListener('click', () => {
+      const text = $('chatInput').value.trim();
+      if (text) { socket.emit('chat:message', { code: roomCode, name: me.name, text }); $('chatInput').value = ''; }
+    });
+
+    /* Socket handlers */
+    socket.on('connect', () => {
+      me.id = socket.id;
+      setStatus('Connesso', 'green');
+      console.log('socket connected', socket.id);
+      socket.emit('rooms:list');
+    });
+    socket.on('disconnect', () => {
+      setStatus('Disconnesso', 'red');
+      console.log('socket disconnected');
+      stopTurnTimer();
+    });
+    socket.on('connect_error', (err) => {
+      setStatus('Errore connessione', 'red');
+      console.error('connect_error', err);
+    });
+
+    // update room list
+    socket.on('rooms:update', (list) => {
+      const el = $('rooms');
+      el.innerHTML = '';
+      if (!list || list.length === 0) {
+        el.innerHTML = '<i>Nessuna stanza attiva al momento.</i>';
+        return;
+      }
+      list.forEach(r => {
+        const div = document.createElement('div');
+        div.className = 'row';
+        div.innerHTML = `<span>Stanza <b>${escapeHtml(r.code)}</b> — Giocatori: ${r.players} — Stato: ${escapeHtml(r.status)}</span>`;
+        const btn = document.createElement('button');
+        btn.textContent = 'Entra';
+        btn.addEventListener('click', () => {
+          me.name = $('name').value || 'Anon';
+          roomCode = r.code;
+          setStatus('Richiesta join ' + roomCode + '...', 'blue');
+          socket.emit('room:join', { code: roomCode, name: me.name });
+        });
+        div.appendChild(btn);
+        el.appendChild(div);
+      });
+    });
+
+    socket.on('system:error', (m) => { appendLog('❗ ' + m); setStatus('Errore: ' + m, 'red'); console.warn('system:error', m); });
+
     socket.on('room:state', (s) => {
-      // show game view
+      // show game UI
       $('home').classList.add('hidden');
       $('game').classList.remove('hidden');
       $('qmax').textContent = s.maxQuestions;
@@ -262,11 +287,17 @@
       $('thinker').classList.toggle('hidden', me.role !== 'thinker');
       $('actions').classList.toggle('hidden', me.role === 'thinker');
       $('start').classList.toggle('hidden', s.status !== 'waiting');
-      // disable secret input when not waiting
+      // disable secret when not waiting
       const secretInput = $('secret');
       if (secretInput) secretInput.disabled = (s.status !== 'waiting');
       appendLog(`👥 Stanza ${s.code} — giocatori: ${s.players.map(p=>p.name + (p.role==='thinker'?'(P)':'')).join(', ')}`);
+      setStatus('Nella stanza ' + s.code, 'black');
     });
+
+    socket.on('log:history', (msgs) => { msgs.forEach(m => appendLog(m)); });
+    socket.on('log:message', (m) => appendLog(m));
+    socket.on('chat:history', (msgs) => { msgs.forEach(m => appendChat(m.name, m.text)); });
+    socket.on('chat:message', ({ name, text }) => appendChat(name, text));
 
     socket.on('round:started', ({ maxQuestions, players }) => {
       $('qcount').textContent = 0;
@@ -274,12 +305,10 @@
       appendLog('▶️ Round iniziato! Max ' + maxQuestions + ' domande.');
       $('start').classList.add('hidden');
     });
-
     socket.on('round:secret', ({ secretWord }) => appendLog('🔒 Sei Pensatore. Parola: ' + secretWord));
 
     socket.on('question:new', (q) => {
       appendLog(`❓ (${q.byName}) ${q.text}`);
-      // If I'm thinker, show overlay and let me answer (server started answer timer)
       if (me.role === 'thinker') {
         lastQuestionId = q.id;
         $('overlay-question').textContent = q.text;
@@ -287,11 +316,9 @@
         $('overlay').style.display = 'flex';
       }
     });
-
     socket.on('question:update', (q) => {
       appendLog(`🗣️ Risposta: ${q.answer}`);
       stopTurnTimer();
-      // hide overlay if it was open for thinker
       if (me.role === 'thinker') $('overlay').style.display = 'none';
     });
 
@@ -304,47 +331,37 @@
       stopTurnTimer();
     });
 
-    socket.on('round:ended', ({ message, secretWord, winnerId }) => {
-      appendLog('🏁 ' + message + (secretWord ? ` (Parola: ${secretWord})` : ''));
-      $('start').classList.remove('hidden');
-      stopTurnTimer();
-
-      // Determine win/lose for this client
-      let isWin = false;
-      if (winnerId) isWin = (winnerId === me.id);
-      else isWin = (me.role === 'thinker'); // fallback if server didn't pass winnerId
-
-      const title = isWin ? '🎉 Hai vinto!' : '💀 Hai perso';
-      const sub = message + (secretWord ? ` Parola: ${secretWord}` : '');
-      showEndOverlay(title, sub, isWin);
-    });
-
     socket.on('counter:update', ({ asked, max }) => {
       $('qcount').textContent = asked;
       $('progress').style.width = (asked/max*100)+'%';
     });
 
-    // Timer: server sends timer:start to the specific target
+    // Timer: server tells exactly when to start timer UI for a given player
     socket.on('timer:start', ({ duration, type }) => {
-      // duration in ms
       startTurnTimer(duration, type);
     });
 
-    // Log & chat
-    socket.on('chat:message', ({ name, text }) => appendChat(name, text));
-    socket.on('chat:history', (msgs) => { msgs.forEach(m => appendChat(m.name, m.text)); });
-    socket.on('log:message', (m) => appendLog(m));
-    socket.on('log:history', (msgs) => { msgs.forEach(m => appendLog(m)); });
+    socket.on('round:ended', ({ message, secretWord, winnerId }) => {
+      appendLog('🏁 ' + message + (secretWord ? ` (Parola: ${secretWord})` : ''));
+      $('start').classList.remove('hidden');
+      stopTurnTimer();
 
-    // Safety: stop UI timer on disconnect/others
-    socket.on('disconnect', () => stopTurnTimer());
+      // Determine win/lose
+      let isWin = false;
+      if (winnerId) isWin = (winnerId === me.id);
+      else isWin = (me.role === 'thinker'); // fallback
+      const title = isWin ? '🎉 Hai vinto!' : '💀 Hai perso';
+      const sub = message + (secretWord ? ` Parola: ${secretWord}` : '');
+      showEndOverlay(title, sub, isWin);
+    });
 
-    // small helper to display end overlay
+    /* Utility UI for debugging / feedback */
     function showEndOverlay(title, sub, win) {
       $('endTitle').textContent = title;
       $('endMessage').textContent = sub;
-      $('endOverlay').className = win ? 'win' : 'lose';
-      $('endOverlay').style.display = 'flex';
+      const el = $('endOverlay');
+      el.className = win ? 'win' : 'lose';
+      el.style.display = 'flex';
     }
   </script>
 </body>
