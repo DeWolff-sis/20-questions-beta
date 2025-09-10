@@ -1,4 +1,4 @@
-// server.js (versione 1.3)
+// server.js (versione 1.2)
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
@@ -28,8 +28,7 @@ const io = new Server(server, { cors: { origin: '*' } });
  *   logs: [],
  *   chat: [],
  *   turnTimer: numeric timeout id (or null),
- *   lastQuestionId: id of current question waiting for answer,
- *   guessTimers: Map(socketId -> timeoutId)  // NEW in 1.3
+ *   lastQuestionId: id of current question waiting for answer
  * })
  */
 const rooms = new Map();
@@ -48,11 +47,11 @@ function createRoom(code) {
     maxQuestions: 20,
     asked: 0,
     guessAttempts: null,
+    guessTimers: {}, // aggiunto
     logs: [],
     chat: [],
     turnTimer: null,
-    lastQuestionId: null,
-    guessTimers: new Map()
+    lastQuestionId: null
   });
 }
 
@@ -97,59 +96,6 @@ function startAnswerTimer(room, questionId) {
   room.turnTimer = setTimeout(() => handleAnswerTimeout(room, thinkerId, questionId), 60000);
 }
 
-/* === NEW for 1.3: Guess timers (per-player timers during guessing phase) === */
-function clearGuessTimerFor(room, playerId) {
-  if (!room) return;
-  if (room.guessTimers && room.guessTimers.has(playerId)) {
-    clearTimeout(room.guessTimers.get(playerId));
-    room.guessTimers.delete(playerId);
-  }
-}
-function clearGuessTimers(room) {
-  if (!room) return;
-  if (!room.guessTimers) return;
-  for (const [id, t] of room.guessTimers.entries()) {
-    clearTimeout(t);
-  }
-  room.guessTimers.clear();
-}
-function startGuessTimer(room, playerId) {
-  if (!room) return;
-  // clear existing for safety
-  clearGuessTimerFor(room, playerId);
-  io.to(playerId).emit('timer:start', { duration: 60000, type: 'guess' });
-  const t = setTimeout(() => handleGuessTimeout(room, playerId), 60000);
-  room.guessTimers.set(playerId, t);
-}
-function handleGuessTimeout(room, playerId) {
-  if (!room || room.status !== 'guessing') return;
-  if (!room.guessAttempts || room.guessAttempts[playerId] == null) return;
-  if (room.guessAttempts[playerId] <= 0) {
-    clearGuessTimerFor(room, playerId);
-    return;
-  }
-
-  // lose one attempt
-  room.guessAttempts[playerId]--;
-  pushLog(room, `⏱ ${room.players.get(playerId)?.name} non ha fatto il tentativo in tempo — perso un tentativo (rimasti: ${room.guessAttempts[playerId]})`);
-  io.to(room.code).emit('guess:timeout', { socketId: playerId, remaining: room.guessAttempts[playerId] });
-
-  // clear player's timer (already cleared by handler) then:
-  clearGuessTimerFor(room, playerId);
-
-  // If player still has attempts, start a fresh timer for their next attempt
-  if (room.guessAttempts[playerId] > 0) {
-    startGuessTimer(room, playerId);
-  }
-
-  // If everyone out, end round (thinker wins)
-  const allOut = Object.values(room.guessAttempts).every(x => x <= 0);
-  if (allOut) {
-    return endRoundAndRotate(room.code, 'Nessuno ha indovinato. Tentativi esauriti.', room.thinkerSocketId);
-  }
-}
-
-/* Handle timeouts during asking/answering */
 function handleAskTimeout(room, playerId) {
   if (!room || room.status !== 'playing') return;
   // ensure current is same player
@@ -235,7 +181,6 @@ function handleAnswerTimeout(room, thinkerId, questionId) {
     if (thinker.timeouts >= 3) {
       // expel thinker -> end round
       clearTurnTimer(room);
-      clearGuessTimers(room);
       io.to(room.code).emit('round:ended', {
         message: 'Il Pensatore è stato espulso per inattività. Round terminato.',
         secretWord: room.secretWord,
@@ -266,25 +211,21 @@ function startGuessPhase(code) {
   if (!room) return;
   room.status = 'guessing';
   room.guessAttempts = {};
+  room.guessTimers = {};
   clearTurnTimer(room);
-  clearGuessTimers(room);
-
   for (const [id] of room.players) {
-    if (id !== room.thinkerSocketId) {
-      room.guessAttempts[id] = 2;
-      // start timer for each player so every attempt has a 60s window
-      startGuessTimer(room, id);
-    }
+    if (id !== room.thinkerSocketId) room.guessAttempts[id] = 2;
   }
-  pushLog(room, '🔔 Domande finite! Ogni giocatore ha 2 tentativi per indovinare (60s ciascuno).');
+  pushLog(room, '🔔 Domande finite! Ogni giocatore ha 2 tentativi per indovinare.');
   io.to(code).emit('room:state', publicRoomState(room));
+  startGuessTimers(room); // lancia timer individuali
 }
+
 
 function endRoundAndRotate(code, message, winnerId = null) {
   const room = rooms.get(code);
   if (!room) return;
   clearTurnTimer(room);
-  clearGuessTimers(room);
   io.to(code).emit('round:ended', {
     message,
     secretWord: room.secretWord,
@@ -300,6 +241,7 @@ function endRoundAndRotate(code, message, winnerId = null) {
   room.asked = 0;
   room.guessAttempts = null;
   room.lastQuestionId = null;
+  clearTurnTimer(room);
   pushLog(room, message);
   io.to(code).emit('room:state', publicRoomState(room));
   io.emit('rooms:update', listRooms());
@@ -327,9 +269,6 @@ function rotateThinker(room) {
 /* When a player leaves while round in progress, adjust turnOrder & maybe advance */
 function handlePlayerExitDuringRound(room, socketId) {
   if (!room) return;
-  // remove any guess timer if in guessing phase
-  clearGuessTimerFor(room, socketId);
-
   const idx = room.turnOrder.indexOf(socketId);
   if (idx !== -1) {
     room.turnOrder.splice(idx, 1);
@@ -351,25 +290,53 @@ function handlePlayerExitDuringRound(room, socketId) {
   }
 }
 
+/* --- Timer individuale per fase guessing --- */
+function startGuessTimers(room) {
+  if (!room || !room.guessAttempts) return;
+  for (const id in room.guessAttempts) {
+    startSingleGuessTimer(room, id);
+  }
+}
+
+function startSingleGuessTimer(room, playerId) {
+  if (room.guessTimers[playerId]) clearTimeout(room.guessTimers[playerId]);
+  room.guessTimers[playerId] = setTimeout(() => {
+    room.guessAttempts[playerId]--;
+    pushLog(room, `⏱ ${room.players.get(playerId)?.name} non ha tentato in tempo — tentativi rimasti: ${room.guessAttempts[playerId]}`);
+    io.to(room.code).emit('guess:new', {
+      by: playerId,
+      name: room.players.get(playerId)?.name,
+      text: '(timeout)',
+      correct: false
+    });
+    if (room.guessAttempts[playerId] <= 0) delete room.guessTimers[playerId];
+    checkGuessPhaseEnd(room);
+  }, 60000);
+}
+
+function checkGuessPhaseEnd(room) {
+  if (!room.guessAttempts) return;
+  const allOut = Object.values(room.guessAttempts).every(x => x <= 0);
+  if (allOut) endRoundAndRotate(room.code, 'Nessuno ha indovinato. Tentativi esauriti.', room.thinkerSocketId);
+}
+
 /* --- Socket handlers --- */
 io.on('connection', (socket) => {
   // initial list on demand
   socket.on('rooms:list', () => socket.emit('rooms:update', listRooms()));
 
   socket.on('room:create', ({ code, name }) => {
-    // if code provided use it, else generate a code
-    const roomCode = (code || String(Math.random().toString(36).substr(2,4)).toUpperCase()).toUpperCase();
-    if (rooms.has(roomCode)) return socket.emit('system:error', 'Codice stanza già esistente');
-    createRoom(roomCode);
-    const room = rooms.get(roomCode);
-    room.players.set(socket.id, { name: name || 'Anon', role: 'thinker', timeouts: 0 });
+    if (rooms.has(code)) return socket.emit('system:error', 'Codice stanza già esistente');
+    createRoom(code);
+    const room = rooms.get(code);
+    room.players.set(socket.id, { name, role: 'thinker', timeouts: 0 });
     room.thinkerSocketId = socket.id;
-    socket.join(roomCode);
+    socket.join(code);
 
-    pushLog(room, `👤 ${name || 'Anon'} ha creato la stanza ed è il Pensatore`);
+    pushLog(room, `👤 ${name} ha creato la stanza ed è il Pensatore`);
     socket.emit('log:history', room.logs);
     socket.emit('chat:history', room.chat);
-    io.to(roomCode).emit('room:state', publicRoomState(room));
+    io.to(code).emit('room:state', publicRoomState(room));
     io.emit('rooms:update', listRooms());
   });
 
@@ -377,32 +344,21 @@ io.on('connection', (socket) => {
     const room = rooms.get(code);
     if (!room) return socket.emit('system:error', 'Stanza non trovata');
 
-    room.players.set(socket.id, { name: name || 'Anon', role: 'guesser', timeouts: 0 });
+    room.players.set(socket.id, { name, role: 'guesser', timeouts: 0 });
     socket.join(code);
 
     // send histories
     socket.emit('log:history', room.logs);
     socket.emit('chat:history', room.chat);
 
-    pushLog(room, `👋 ${name || 'Anon'} è entrato nella stanza`);
+    pushLog(room, `👋 ${name} è entrato nella stanza`);
     io.to(code).emit('room:state', publicRoomState(room));
     io.emit('rooms:update', listRooms());
 
     // if playing, append to turnOrder if not present
     if (room.status === 'playing' && socket.id !== room.thinkerSocketId && !room.turnOrder.includes(socket.id)) {
       room.turnOrder.push(socket.id);
-      pushLog(room, `➕ ${name || 'Anon'} si è unito in corsa e verrà servito quando arriverà il suo turno`);
-      io.to(code).emit('room:state', publicRoomState(room));
-    }
-
-    // If joining during guessing phase, give them attempts & start their guess timer
-    if (room.status === 'guessing' && socket.id !== room.thinkerSocketId) {
-      if (!room.guessAttempts) room.guessAttempts = {};
-      if (room.guessAttempts[socket.id] == null) {
-        room.guessAttempts[socket.id] = 2;
-      }
-      startGuessTimer(room, socket.id);
-      pushLog(room, `🔔 ${name || 'Anon'} si è unito durante la fase di guessing e ha ${room.guessAttempts[socket.id]} tentativi.`);
+      pushLog(room, `➕ ${name} si è unito in corsa e verrà servito quando arriverà il suo turno`);
       io.to(code).emit('room:state', publicRoomState(room));
     }
   });
@@ -419,7 +375,6 @@ io.on('connection', (socket) => {
     if (socket.id === room.thinkerSocketId) {
       // thinker leaves -> reveal and end
       clearTurnTimer(room);
-      clearGuessTimers(room);
       io.to(code).emit('round:ended', {
         message: 'Il Pensatore ha lasciato la stanza. Round terminato.',
         secretWord: room.secretWord,
@@ -435,8 +390,6 @@ io.on('connection', (socket) => {
       handlePlayerExitDuringRound(room, socket.id);
       io.to(code).emit('room:state', publicRoomState(room));
       io.emit('rooms:update', listRooms());
-      // clean up guess timer if present
-      clearGuessTimerFor(room, socket.id);
       if (room.players.size === 0) rooms.delete(code);
     }
   });
@@ -538,39 +491,31 @@ io.on('connection', (socket) => {
     const player = room.players.get(socket.id);
     if (player) player.timeouts = 0;
 
-    // GUESSING PHASE: per-player attempts & timers
     if (room.status === 'guessing' && room.guessAttempts) {
-      if (socket.id === room.thinkerSocketId) return;
-      if (room.guessAttempts[socket.id] == null) room.guessAttempts[socket.id] = 2;
-      if (room.guessAttempts[socket.id] <= 0) return;
+  if (socket.id === room.thinkerSocketId) return;
+  if (!room.guessAttempts[socket.id]) room.guessAttempts[socket.id] = 2;
+  if (room.guessAttempts[socket.id] <= 0) return;
 
-      // clear current guess timer for this player (they acted)
-      clearGuessTimerFor(room, socket.id);
+  // stop timer del giocatore
+  if (room.guessTimers[socket.id]) clearTimeout(room.guessTimers[socket.id]);
 
-      room.guessAttempts[socket.id]--;
-      pushLog(room,
-        `${room.players.get(socket.id)?.name} ha tentato: "${guess}" ${correct ? '✅' : '❌'} — Tentativi rimasti: ${room.guessAttempts[socket.id]}`
-      );
-      io.to(code).emit('guess:new', { by: socket.id, name: room.players.get(socket.id)?.name, text: guess, correct });
+  room.guessAttempts[socket.id]--;
+  pushLog(room, `${player.name} ha tentato: "${guess}" — Tentativi rimasti: ${room.guessAttempts[socket.id]}`);
+  io.to(code).emit('guess:new', { by: socket.id, name: player.name, text: guess, correct: room.secretWord && guess.toLowerCase() === room.secretWord.toLowerCase() });
+  
+  if (room.secretWord && guess.toLowerCase() === room.secretWord.toLowerCase()) {
+    return endRoundAndRotate(code, `${player.name} ha indovinato!`, socket.id);
+  }
 
-      if (correct) {
-        return endRoundAndRotate(code, `${room.players.get(socket.id)?.name} ha indovinato!`, socket.id);
-      }
+  if (room.guessAttempts[socket.id] > 0) startSingleGuessTimer(room, socket.id);
 
-      // if still has attempts, start timer for next attempt
-      if (room.guessAttempts[socket.id] > 0) {
-        startGuessTimer(room, socket.id);
-      }
+  checkGuessPhaseEnd(room);
+  return;
+}
 
-      const allOut = Object.values(room.guessAttempts).every(x => x <= 0);
-      if (allOut) {
-        // thinker wins if everyone ran out of attempts
-        return endRoundAndRotate(code, 'Nessuno ha indovinato. Tentativi esauriti.', room.thinkerSocketId);
-      }
-      return;
     }
 
-    // PLAYING-PHASE guess (before guessing phase)
+    // playing-phase guess
     room.guesses.push({ by: socket.id, text: guess, correct });
     io.to(code).emit('guess:new', { by: socket.id, name: room.players.get(socket.id)?.name, text: guess, correct });
     if (correct) return endRoundAndRotate(code, `${room.players.get(socket.id)?.name} ha indovinato!`, socket.id);
@@ -606,12 +551,8 @@ io.on('connection', (socket) => {
       room.players.delete(socket.id);
       if (player) pushLog(room, `🚪 ${player.name} si è disconnesso`);
 
-      // clear any guess timer for this player
-      clearGuessTimerFor(room, socket.id);
-
       if (socket.id === room.thinkerSocketId) {
         clearTurnTimer(room);
-        clearGuessTimers(room);
         io.to(code).emit('round:ended', {
           message: 'Il Pensatore ha lasciato la stanza. Round terminato.',
           secretWord: room.secretWord,
