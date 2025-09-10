@@ -493,8 +493,9 @@ io.on('connection', (socket) => {
 
     if (room.status === 'guessing' && room.guessAttempts) {
   if (socket.id === room.thinkerSocketId) return;
-  if (!room.guessAttempts[socket.id]) room.guessAttempts[socket.id] = 2;
-  if (room.guessAttempts[socket.id] <= 0) return;
+
+  // Se il giocatore non ha tentativi, ignora (già finiti)
+  if (!room.guessAttempts.hasOwnProperty(socket.id) || room.guessAttempts[socket.id] <= 0) return;
 
   // stop timer del giocatore
   if (room.guessTimers[socket.id]) clearTimeout(room.guessTimers[socket.id]);
@@ -502,7 +503,7 @@ io.on('connection', (socket) => {
   room.guessAttempts[socket.id]--;
   pushLog(room, `${player.name} ha tentato: "${guess}" — Tentativi rimasti: ${room.guessAttempts[socket.id]}`);
   io.to(code).emit('guess:new', { by: socket.id, name: player.name, text: guess, correct: room.secretWord && guess.toLowerCase() === room.secretWord.toLowerCase() });
-  
+
   if (room.secretWord && guess.toLowerCase() === room.secretWord.toLowerCase()) {
     return endRoundAndRotate(code, `${player.name} ha indovinato!`, socket.id);
   }
