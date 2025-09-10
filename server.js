@@ -482,59 +482,63 @@ io.on('connection', (socket) => {
   });
 
   socket.on('guess:submit', ({ code, text }) => {
-    const room = rooms.get(code);
-    if (!room || (room.status !== 'playing' && room.status !== 'guessing')) return;
-    const guess = String(text).trim();
-    const correct = room.secretWord && guess.toLowerCase() === room.secretWord.toLowerCase();
+  const room = rooms.get(code);
+  if (!room || (room.status !== 'playing' && room.status !== 'guessing')) return;
+  const guess = String(text).trim();
+  const correct = room.secretWord && guess.toLowerCase() === room.secretWord.toLowerCase();
 
-    // reset player's timeout count (any action resets)
-    const player = room.players.get(socket.id);
-    if (player) player.timeouts = 0;
+  // reset player's timeout count (any action resets)
+  const player = room.players.get(socket.id);
+  if (player) player.timeouts = 0;
 
-    if (room.status === 'guessing' && room.guessAttempts) {
-  if (socket.id === room.thinkerSocketId) return;
+  if (room.status === 'guessing' && room.guessAttempts) {
+    if (socket.id === room.thinkerSocketId) return;
 
-  // Se il giocatore non ha tentativi, ignora (già finiti)
-  if (!room.guessAttempts.hasOwnProperty(socket.id) || room.guessAttempts[socket.id] <= 0) return;
+    // Se il giocatore non ha tentativi, ignora (già finiti)
+    if (!room.guessAttempts.hasOwnProperty(socket.id) || room.guessAttempts[socket.id] <= 0) return;
 
-  // stop timer del giocatore
-  if (room.guessTimers[socket.id]) clearTimeout(room.guessTimers[socket.id]);
+    // stop timer del giocatore
+    if (room.guessTimers[socket.id]) clearTimeout(room.guessTimers[socket.id]);
 
-  room.guessAttempts[socket.id]--;
-  pushLog(room, `${player.name} ha tentato: "${guess}" — Tentativi rimasti: ${room.guessAttempts[socket.id]}`);
-  io.to(code).emit('guess:new', { by: socket.id, name: player.name, text: guess, correct: room.secretWord && guess.toLowerCase() === room.secretWord.toLowerCase() });
+    room.guessAttempts[socket.id]--;
+    pushLog(room, `⏱ ${player.name} ha tentato: "${guess}" -- Tentativi rimasti: ${room.guessAttempts[socket.id]}`);
+    io.to(code).emit('guess:new', {
+      by: socket.id,
+      name: player.name,
+      text: guess,
+      correct: correct
+    });
 
-  if (room.secretWord && guess.toLowerCase() === room.secretWord.toLowerCase()) {
-    return endRoundAndRotate(code, `${player.name} ha indovinato!`, socket.id);
+    if (correct) {
+      return endRoundAndRotate(code, `${player.name} ha indovinato!`, socket.id);
+    }
+
+    if (room.guessAttempts[socket.id] > 0) startSingleGuessTimer(room, socket.id);
+
+    checkGuessPhaseEnd(room);
+    return;
   }
 
-  if (room.guessAttempts[socket.id] > 0) startSingleGuessTimer(room, socket.id);
+  // playing-phase guess
+  room.guesses.push({ by: socket.id, text: guess, correct });
+  io.to(code).emit('guess:new', { by: socket.id, name: player.name, text: guess, correct });
+  if (correct) return endRoundAndRotate(code, `${player.name} ha indovinato!`, socket.id);
 
-  checkGuessPhaseEnd(room);
-  return;
-}
-
+  // wrong guess counts as used question
+  room.asked++;
+  io.to(code).emit('counter:update', { asked: room.asked, max: room.maxQuestions });
+  if (room.asked >= room.maxQuestions) startGuessPhase(code);
+  else {
+    // advance turn
+    if (room.turnOrder.length > 0) {
+      room.turnIdx = (room.turnIdx + 1) % room.turnOrder.length;
+      const nextId = room.turnOrder[room.turnIdx];
+      io.to(code).emit('turn:now', { socketId: nextId, name: room.players.get(nextId)?.name });
+      startAskTimer(room);
     }
+  }
+});
 
-    // playing-phase guess
-    room.guesses.push({ by: socket.id, text: guess, correct });
-    io.to(code).emit('guess:new', { by: socket.id, name: room.players.get(socket.id)?.name, text: guess, correct });
-    if (correct) return endRoundAndRotate(code, `${room.players.get(socket.id)?.name} ha indovinato!`, socket.id);
-
-    // wrong guess counts as used question
-    room.asked++;
-    io.to(code).emit('counter:update', { asked: room.asked, max: room.maxQuestions });
-    if (room.asked >= room.maxQuestions) startGuessPhase(code);
-    else {
-      // advance turn
-      if (room.turnOrder.length > 0) {
-        room.turnIdx = (room.turnIdx + 1) % room.turnOrder.length;
-        const nextId = room.turnOrder[room.turnIdx];
-        io.to(code).emit('turn:now', { socketId: nextId, name: room.players.get(nextId)?.name });
-        startAskTimer(room);
-      }
-    }
-  });
 
   // chat
   socket.on('chat:message', ({ code, name, text }) => {
